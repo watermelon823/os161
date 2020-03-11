@@ -41,6 +41,7 @@
  * Unless you're implementing multithreaded user processes, the only
  * process that will have more than one thread is the kernel process.
  */
+ 
 
 #include <types.h>
 #include <proc.h>
@@ -50,6 +51,8 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
+#include "opt-A2.h" 
+#include <array.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -68,6 +71,10 @@ static struct semaphore *proc_count_mutex;
 /* used to signal the kernel menu thread when there are no processes */
 struct semaphore *no_proc_sem;   
 #endif  // UW
+#if OPT_A2
+static struct spinlock pid_lock;
+int pid_count;
+#endif
 
 
 
@@ -102,6 +109,21 @@ proc_create(const char *name)
 #ifdef UW
 	proc->console = NULL;
 #endif // UW
+
+#if OPT_A2
+   proc->parentP = NULL;
+   proc->childrenP = array_create();
+   spinlock_acquire(&pid_lock);
+   proc->pid = pid_count;
+   pid_count++;
+   spinlock_release(&pid_lock);
+   proc->parent_wait = cv_create("parent_wait");
+   proc->childNum_lock = lock_create("childNum_lock");
+
+   proc->exit_lock = lock_create("exit_lock");
+   proc->zombied = false;
+   proc->waitpid_called = false;
+#endif
 
 	return proc;
 }
@@ -163,6 +185,22 @@ proc_destroy(struct proc *proc)
 	}
 #endif // UW
 
+#if OPT_A2
+   proc->parentP = NULL;
+   proc->pid = 0;
+   proc->waitpid_called = false;
+   proc->zombied = false;
+   int arr_num = array_num(proc->childrenP);
+   while(arr_num>0){
+	   array_remove(proc->childrenP,0);
+	   arr_num--;
+   }
+   array_destroy(proc->childrenP);
+   cv_destroy(proc->parent_wait);
+   lock_destroy(proc->childNum_lock);
+   lock_destroy(proc->exit_lock);
+#endif
+
 	threadarray_cleanup(&proc->p_threads);
 	spinlock_cleanup(&proc->p_lock);
 
@@ -193,10 +231,16 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+#if OPT_A2
+  pid_count = 1;  
+  spinlock_init(&pid_lock);
+#endif  
   kproc = proc_create("[kernel]");
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");
   }
+
+
 #ifdef UW
   proc_count = 0;
   proc_count_mutex = sem_create("proc_count_mutex",1);
