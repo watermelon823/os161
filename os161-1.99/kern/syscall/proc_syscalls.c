@@ -15,6 +15,8 @@
 #if OPT_A2
 #include <mips/trapframe.h>
 #include<synch.h>
+#include <vfs.h>
+#include <kern/fcntl.h>
 #endif
 
 /* this implementation of sys__exit does not do anything with the exit code */
@@ -209,6 +211,83 @@ int sys_fork(struct trapframe *tf_p, pid_t* retval){
   thread_fork("childThread",child_p, enter_forked_process,tf_os,0);
   *retval = child_p->pid;
   return (0);
+
+}
+#endif
+
+#if OPT_A2
+int sys_execv(char *progname){
+  struct addrspace *as;
+  struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+	int result;
+  
+
+  //copy progname from userspace to kernel space
+  size_t progname_size = (strlen(progname) + 1) * sizeof(char);
+  char* progname_kernel = kmalloc(progname_size);
+  KASSERT(progname_kernel != NULL);
+  result = copyin((const_userptr_t)progname, (void *)progname_kernel, progname_size);
+  if (result){
+    kfree(progname_kernel);
+    return result;
+  }
+
+  kprintf("!!!!!!%c\n", *progname);
+
+	/* Open the file. */
+	result = vfs_open(progname, O_RDONLY, 0, &v);
+	if (result) {
+    kfree(progname_kernel);
+		return result;
+	}
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as ==NULL) {
+		vfs_close(v);
+    kfree(progname_kernel);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	 struct addrspace *oldAs = curproc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+    kfree(progname_kernel);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+    kfree(progname_kernel);
+		return result;
+	}
+  
+  //destroy old addresspace
+  as_destroy(oldAs);
+  kfree(progname_kernel);
+
+	/* Warp to user mode. */
+	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+			  stackptr, entrypoint);
+
+	
+	/* enter_new_process does not return. */
+	panic("enter_new_process returned\n");
+	return EINVAL;
+
+  
 
 }
 #endif

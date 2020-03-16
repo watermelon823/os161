@@ -83,6 +83,7 @@ syscall(struct trapframe *tf)
 	int32_t retval;
 	int err;
 
+
 	KASSERT(curthread != NULL);
 	KASSERT(curthread->t_curspl == 0);
 	KASSERT(curthread->t_iplhigh_count == 0);
@@ -134,9 +135,13 @@ syscall(struct trapframe *tf)
 
 	    /* Add stuff here */
 #if OPT_A2
+    case SYS_execv:
+	  err = sys_execv((char*)tf->tf_a0);
+	  break;
     case SYS_fork:
 	  err = sys_fork(tf,(pid_t *)&retval);
 	  break;
+
 #endif
  
 	default:
