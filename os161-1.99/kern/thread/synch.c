@@ -195,8 +195,8 @@ void
 lock_acquire(struct lock *lock)
 {
         // Write this
-        (void)lock;  // suppress warning until code gets written
         KASSERT(lock != NULL);
+        KASSERT(!lock_do_i_hold(lock));
 
         /*
          * May not block in an interrupt handler.
@@ -223,12 +223,12 @@ void
 lock_release(struct lock *lock)
 {
         // Write this
-        (void)lock;  // suppress warning until code gets written
         KASSERT(lock != NULL);
-        KASSERT(lock_do_i_hold(lock));
+        KASSERT(lock->lk_owner == curthread);
 
 	      spinlock_acquire(&lock->lk_lock);
               lock->lk_held = false;
+              lock->lk_owner = NULL;
 	      wchan_wakeone(lock->lk_wchan);
 
 	      spinlock_release(&lock->lk_lock);
@@ -239,13 +239,8 @@ bool
 lock_do_i_hold(struct lock *lock)
 {
         // Write this
-        (void)lock;  // suppress warning until code gets written
-        if(curthread==lock->lk_owner){
-            return true;
-        }
-        else {
-          return false;
-        }
+        KASSERT(lock != NULL);
+        return (lock->lk_owner == curthread);
 }
 
 ////////////////////////////////////////////////////////////
