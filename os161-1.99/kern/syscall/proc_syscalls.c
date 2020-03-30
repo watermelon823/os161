@@ -216,12 +216,19 @@ int sys_fork(struct trapframe *tf_p, pid_t* retval){
 #endif
 
 #if OPT_A2
-int sys_execv(char *progname){
+int sys_execv(char *progname, char **args){
   struct addrspace *as;
   struct vnode *v;
 	vaddr_t entrypoint, stackptr;
 	int result;
+  int args_count=0;
   
+
+  for(int i=0; args[i]!=NULL; i++){
+    args_count++;
+  }
+  // kprintf("args_count in sys_execv: %d\n", args_count);
+
 
   //copy progname from userspace to kernel space
   size_t progname_size = (strlen(progname) + 1) * sizeof(char);
@@ -230,22 +237,54 @@ int sys_execv(char *progname){
   result = copyin((const_userptr_t)progname, (void *)progname_kernel, progname_size);
   if (result){
     kfree(progname_kernel);
-    return result;
+    return ENOENT;
   }
+
+  // copy each args element to kernel space
+  size_t args_size = (args_count + 1) * sizeof(char *);
+  char ** args_kernel = kmalloc(args_size);
+  KASSERT(args_kernel != NULL);
+
+  for(int i=0; i<args_count; i++){
+    size_t cur_size = (strlen(args[i]) + 1) * sizeof(char);
+    args_kernel[i] = kmalloc(cur_size);
+    result = copyin((const_userptr_t) args[i], (void *) args_kernel[i], cur_size);
+    // kprintf("In sys_execv $$$args_kernel[%d]->",i);
+    // kprintf("%s\n", args_kernel[i]);
+    if (result){
+      kfree(progname_kernel);
+      for(int j=0; j<=i; j++){
+        kfree(args_kernel[j]);
+      }
+      kfree(args_kernel);
+      return EFAULT;
+    }
+  }
+  args_kernel[args_count] = NULL;
+  
+
 
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
-	if (result) {
-    kfree(progname_kernel);
-		return result;
-	}
+	if (result){
+      kfree(progname_kernel);
+      for(int i=0; i<args_count; i++){
+       kfree(args_kernel[i]);
+      }
+      kfree(args_kernel);
+      return EISDIR;
+  }
 
 	/* Create a new address space. */
 	as = as_create();
 	if (as ==NULL) {
 		vfs_close(v);
     kfree(progname_kernel);
+    for(int i=0; i<args_count; i++){
+      kfree(args_kernel[i]);
+    }
+    kfree(args_kernel);
 		return ENOMEM;
 	}
 
@@ -259,7 +298,11 @@ int sys_execv(char *progname){
 		/* p_addrspace will go away when curproc is destroyed */
 		vfs_close(v);
     kfree(progname_kernel);
-		return result;
+    for(int i=0; i<args_count; i++){
+      kfree(args_kernel[i]);
+    }
+    kfree(args_kernel);
+		return ENOENT;
 	}
 
 	/* Done with the file now. */
@@ -270,16 +313,69 @@ int sys_execv(char *progname){
 	if (result) {
 		/* p_addrspace will go away when curproc is destroyed */
     kfree(progname_kernel);
+    for(int i=0; i<args_count; i++){
+      kfree(args_kernel[i]);
+    }
+    kfree(args_kernel);
 		return result;
 	}
-  
+
+
+  //copy args from kernel to userstack
+  vaddr_t *args_ptrs = kmalloc((args_count + 1) * sizeof(vaddr_t));
+  for(int i= (args_count-1); i>=0; i--){
+    int cur_size = (strlen(args_kernel[i]) + 1) * sizeof(char);
+    cur_size = ROUNDUP(cur_size,8);
+    stackptr = stackptr - cur_size;
+    result = copyout((const void*) args_kernel[i], (userptr_t)stackptr, cur_size);
+    // kprintf("In sys_execv ***argv[%d]->",i);
+    // kprintf("%s\n", args_kernel[i]);
+    if (result) {
+      kfree(progname_kernel);
+      for(int i=0; i<args_count; i++){
+         kfree(args_kernel[i]);
+      }
+      kfree(args_kernel);
+      kfree(args_ptrs);
+		  return result;
+	  }
+    args_ptrs[i] = stackptr;
+  }
+  args_ptrs[args_count] = (vaddr_t)NULL;
+
+  //copy arg pointers from kernel to userstack
+  for(int i =args_count; i>=0; i--){
+    size_t va_size = sizeof(vaddr_t);
+    stackptr -= va_size ;
+    result = copyout((const void*)&args_ptrs[i], (userptr_t)stackptr, va_size);
+    if (result) {
+      kfree(progname_kernel);
+      for(int i=0; i<args_count; i++){
+        kfree(args_kernel[i]);
+      }
+      kfree(args_kernel);
+      kfree(args_ptrs);
+		  return result;
+	  }
+  }
+
   //destroy old addresspace
   as_destroy(oldAs);
   kfree(progname_kernel);
+  kfree(args_ptrs);
+
+  for(int i=0; i<args_count; i++){
+    kfree(args_kernel[i]);
+  }
+  kfree(args_kernel);
+
+
+  vaddr_t stackptr1 = stackptr-8;
+   stackptr1 = ROUNDUP(stackptr1,8);
 
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
+	enter_new_process(args_count /*argc*/, (userptr_t)stackptr /*userspace addr of argv*/,
+			  stackptr1, entrypoint);
 
 	
 	/* enter_new_process does not return. */
