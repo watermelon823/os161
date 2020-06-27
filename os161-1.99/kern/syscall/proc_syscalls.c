@@ -18,9 +18,63 @@
 #include <vfs.h>
 #include <kern/fcntl.h>
 #endif
+#include "opt-A3.h"
 
-/* this implementation of sys__exit does not do anything with the exit code */
-/* this needs to be fixed to get exit() and waitpid() working properly */
+#if OPT_A3
+
+void sys_kill(int exitcode) {
+
+  struct addrspace *as;
+  struct proc *p = curproc;
+
+  int child_num = array_num(p->childrenP);
+  for(int i=0; i<child_num; i++){
+    struct proc *cur = (struct proc *) array_get(p->childrenP, i);
+    cur->parentP = NULL;
+      if(cur->zombied == true ){
+         proc_destroy(cur);
+         array_set(p->childrenP, i, NULL);
+      }
+  }
+
+  DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
+
+  KASSERT(curproc->p_addrspace != NULL);
+  as_deactivate();
+  /*
+   * clear p_addrspace before calling as_destroy. Otherwise if
+   * as_destroy sleeps (which is quite possible) when we
+   * come back we'll be calling as_activate on a
+   * half-destroyed address space. This tends to be
+   * messily fatal.
+   */
+  as = curproc_setas(NULL);
+  as_destroy(as);
+
+  /* detach this thread from its process */
+  /* note: curproc cannot be used after this call */
+  proc_remthread(curthread);
+  
+  p->exitcode = __WSTOPPED;
+  if(p->parentP != NULL && p->waitpid_called == true){
+    lock_acquire(p->exit_lock);
+    cv_signal(p->parent_wait,p->exit_lock);
+    lock_release(p->exit_lock);
+    thread_exit();
+  }
+  else if(p->parentP != NULL && p->waitpid_called == false){
+    p->zombied = true;
+    thread_exit();
+  }
+  else{
+    proc_destroy(p);
+    thread_exit();
+  }
+
+}
+
+#endif
+
 
 void sys__exit(int exitcode) {
 

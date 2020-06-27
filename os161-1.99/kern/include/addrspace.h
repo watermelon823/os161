@@ -36,6 +36,7 @@
 
 
 #include <vm.h>
+#include "opt-A3.h"
 
 struct vnode;
 
@@ -55,6 +56,11 @@ struct addrspace {
   paddr_t as_pbase2;
   size_t as_npages2;
   paddr_t as_stackpbase;
+
+#if OPT_A3
+  bool as_loaded;
+#endif
+
 };
 
 /*
@@ -108,6 +114,10 @@ int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
+
+#if OPT_A3
+int coremap_enough_fit(unsigned long npages);
+#endif
 
 /*
  * Functions in loadelf.c
